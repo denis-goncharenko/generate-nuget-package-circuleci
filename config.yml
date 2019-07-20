@@ -1,0 +1,62 @@
+version: 2
+jobs:
+    build:
+        machine:
+            image: ubuntu-1604:201903-01
+        environment:
+            MAJOR_VERSION: 1
+            MINOR_VERSION: 0
+        steps:
+            - checkout
+            - run:
+                name: Install nuget
+                command: sudo apt install nuget
+            - run:
+                name: Install dotnet-sdk-2.2
+                command: | 
+                            wget -q https://packages.microsoft.com/config/ubuntu/16.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+                            sudo dpkg -i packages-microsoft-prod.deb
+                            sudo apt install apt-transport-https
+                            sudo apt update
+                            sudo apt install dpkg
+                            sudo apt install dotnet-sdk-2.2 -y
+            - run:
+                name: Install Signcode & download certificate
+                command: | 
+                            sudo apt install mono-devel --yes
+                            wget $URL_TO_CERTIFICATE -O certificate.pfx
+            - run:
+                name: SignIn to AzureDevOps
+                command: | 
+                            sudo nuget sources Add -Name "MyFeedName" -Source $NUGET_SOURCE -username $SOURCE_USERNAME -password $SOURCE_PASSWORD -StorePasswordInClearText
+            - run:
+                name: Restore
+                command: sudo dotnet restore --configfile ~/.config/NuGet/NuGet.Config /property:Configuration=$PROJECT_CONFIGURATION
+            - run:
+                name: Build
+                command: sudo dotnet build --configuration $PROJECT_CONFIGURATION --no-restore
+            - run:
+                name: Signing
+                command: |  
+                            openssl pkcs12 -in certificate.pfx -out certificate.crt -nokeys -clcerts -passin pass:$CERT_PASSWORD
+                            openssl x509 -inform pem -in certificate.crt -outform der -out certificate.cer
+                            cert2spc certificate.cer certificate.spc
+                            sudo signcode -t http://timestamp.digicert.com -spc certificate.spc bin/$PROJECT_CONFIGURATION/netcoreapp2.2/*.dll
+            - run:
+                name: Pack
+                command: sudo dotnet pack --no-build -p:PackageVersion=$MAJOR_VERSION.$MINOR_VERSION.$CIRCLE_BUILD_NUM --configuration $PROJECT_CONFIGURATION
+            - run:
+                name: Push nuget
+                command: | 
+                            mkdir -p ~/.nuget/NuGet
+                            sudo cp ~/.config/NuGet/NuGet.Config ~/.nuget/NuGet/
+                            sudo dotnet nuget push bin/$PROJECT_CONFIGURATION/*.nupkg -s $NUGET_SOURCE -k $API_KEY
+workflows:
+    version: 2
+    workflow:
+        jobs:
+        - build:
+            context: context
+            filters:
+                branches:
+                    only: master
